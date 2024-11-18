@@ -2,6 +2,7 @@ package agents;
 
 import java.sql.*;
 import jade.core.Agent;
+import jade.core.AID;
 import jade.core.behaviours.*;
 import jade.domain.FIPAAgentManagement.*;
 import jade.domain.FIPAException;
@@ -12,6 +13,7 @@ import org.json.JSONObject;
 
 public class UserManagementAgent extends Agent {
     private Connection connection;
+    private AID notificationAgent;
 
     protected void setup() {
         try {
@@ -36,8 +38,27 @@ public class UserManagementAgent extends Agent {
                 fe.printStackTrace();
             }
 
-            // Add registration behavior
+            // Find the NotificationAgent
+            try {
+                DFAgentDescription template = new DFAgentDescription();
+                ServiceDescription notifSD = new ServiceDescription();
+                notifSD.setType("notification");
+                template.addServices(notifSD);
+
+                DFAgentDescription[] result = DFService.search(this, template);
+                if (result.length > 0) {
+                    notificationAgent = result[0].getName();
+                    System.out.println("Found NotificationAgent: " + notificationAgent.getName());
+                } else {
+                    System.out.println("NotificationAgent not found");
+                }
+            } catch (FIPAException e) {
+                e.printStackTrace();
+            }
+
+            // Add behaviors
             addBehaviour(new StudentRegistrationBehavior());
+            addBehaviour(new StudentQueryBehavior());
         } catch (SQLException e) {
             System.err.println("Database connection error:");
             e.printStackTrace();
@@ -141,36 +162,88 @@ public class UserManagementAgent extends Agent {
                 block();
             }
         }
+    }
 
-        private boolean isValidStudentId(String studentId) {
-            return studentId.matches("^\\d{8}$"); // Example: 8-digit ID
-        }
+    // New behavior to handle student registration status queries
+    private class StudentQueryBehavior extends CyclicBehaviour {
+        @Override
+        public void action() {
+            MessageTemplate mt = MessageTemplate.MatchPerformative(ACLMessage.QUERY_REF);
+            ACLMessage msg = myAgent.receive(mt);
 
-        private boolean isStudentIdExists(String studentId) {
-            try {
-                PreparedStatement stmt = connection.prepareStatement("SELECT COUNT(*) FROM students WHERE student_id = ?");
-                stmt.setString(1, studentId);
-                ResultSet rs = stmt.executeQuery();
-                rs.next();
-                return rs.getInt(1) > 0;
-            } catch (SQLException e) {
-                e.printStackTrace();
-                return false;
+            if (msg != null) {
+                try {
+                    JSONObject request = new JSONObject(msg.getContent());
+                    String studentId = request.getString("studentId");
+
+                    ACLMessage reply = msg.createReply();
+
+                    if (isStudentIdExists(studentId)) {
+                        reply.setPerformative(ACLMessage.INFORM);
+                        reply.setContent("Student is registered");
+                    } else {
+                        reply.setPerformative(ACLMessage.FAILURE);
+                        reply.setContent("Student is not registered");
+                    }
+
+                    send(reply);
+
+                } catch (Exception e) {
+                    e.printStackTrace();
+                }
+            } else {
+                block();
             }
         }
+    }
 
-        private void registerStudent(String studentId, String name, String email) {
-            try {
-                PreparedStatement stmt = connection.prepareStatement(
-                        "INSERT INTO students (student_id, name, email) VALUES (?, ?, ?)"
-                );
-                stmt.setString(1, studentId);
-                stmt.setString(2, name);
-                stmt.setString(3, email);
-                stmt.executeUpdate();
-            } catch (SQLException e) {
-                e.printStackTrace();
-            }
+    private boolean isValidStudentId(String studentId) {
+        return studentId.matches("^\\d{8}$"); // Example: 8-digit ID
+    }
+
+    private boolean isStudentIdExists(String studentId) {
+        try {
+            PreparedStatement stmt = connection.prepareStatement("SELECT COUNT(*) FROM students WHERE student_id = ?");
+            stmt.setString(1, studentId);
+            ResultSet rs = stmt.executeQuery();
+            rs.next();
+            return rs.getInt(1) > 0;
+        } catch (SQLException e) {
+            e.printStackTrace();
+            return false;
+        }
+    }
+
+    private void registerStudent(String studentId, String name, String email) {
+        try {
+            PreparedStatement stmt = connection.prepareStatement(
+                    "INSERT INTO students (student_id, name, email) VALUES (?, ?, ?)"
+            );
+            stmt.setString(1, studentId);
+            stmt.setString(2, name);
+            stmt.setString(3, email);
+            stmt.executeUpdate();
+
+            // Send notification
+            sendNotification(studentId, "Registration", "Registration successful");
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    // Method to send notification
+    private void sendNotification(String userId, String type, String message) {
+        if (notificationAgent != null) {
+            ACLMessage notifMsg = new ACLMessage(ACLMessage.REQUEST);
+            notifMsg.addReceiver(notificationAgent);
+            JSONObject notification = new JSONObject();
+            notification.put("userId", userId);
+            notification.put("type", type);
+            notification.put("message", message);
+            notifMsg.setContent(notification.toString());
+            send(notifMsg);
+        } else {
+            System.out.println("NotificationAgent not available");
         }
     }
 }

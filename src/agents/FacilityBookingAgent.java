@@ -1,12 +1,12 @@
 package agents;
 
 import jade.core.Agent;
+import jade.core.AID;
 import jade.core.behaviours.CyclicBehaviour;
 import jade.lang.acl.ACLMessage;
 import jade.lang.acl.MessageTemplate;
 import jade.domain.DFService;
-import jade.domain.FIPAAgentManagement.DFAgentDescription;
-import jade.domain.FIPAAgentManagement.ServiceDescription;
+import jade.domain.FIPAAgentManagement.*;
 import jade.domain.FIPAException;
 import org.json.JSONObject;
 import org.json.JSONArray;
@@ -15,6 +15,8 @@ import java.sql.*;
 
 public class FacilityBookingAgent extends Agent {
     private Connection connection;
+    private AID userManagementAgent;
+    private AID notificationAgent;
 
     @Override
     protected void setup() {
@@ -36,6 +38,42 @@ public class FacilityBookingAgent extends Agent {
             dfd.addServices(sd);
 
             DFService.register(this, dfd);
+
+            // Find the UserManagementAgent
+            try {
+                DFAgentDescription template = new DFAgentDescription();
+                ServiceDescription userSD = new ServiceDescription();
+                userSD.setType("user-management");
+                template.addServices(userSD);
+
+                DFAgentDescription[] result = DFService.search(this, template);
+                if (result.length > 0) {
+                    userManagementAgent = result[0].getName();
+                    System.out.println("Found UserManagementAgent: " + userManagementAgent.getName());
+                } else {
+                    System.out.println("UserManagementAgent not found");
+                }
+            } catch (FIPAException e) {
+                e.printStackTrace();
+            }
+
+            // Find the NotificationAgent
+            try {
+                DFAgentDescription template = new DFAgentDescription();
+                ServiceDescription notifSD = new ServiceDescription();
+                notifSD.setType("notification");
+                template.addServices(notifSD);
+
+                DFAgentDescription[] result = DFService.search(this, template);
+                if (result.length > 0) {
+                    notificationAgent = result[0].getName();
+                    System.out.println("Found NotificationAgent: " + notificationAgent.getName());
+                } else {
+                    System.out.println("NotificationAgent not found");
+                }
+            } catch (FIPAException e) {
+                e.printStackTrace();
+            }
 
             // Add behaviors for room availability, booking requests, and cancellations
             addBehaviour(new RoomAvailabilityBehavior());
@@ -154,34 +192,91 @@ public class FacilityBookingAgent extends Agent {
                     String date = request.getString("date");
                     String timeSlot = request.getString("timeSlot");
                     String studentId = request.getString("studentId");
+                    String name = request.optString("name");   // Optional
+                    String email = request.optString("email"); // Optional
 
-                    ACLMessage reply = msg.createReply();
+                    // Check if the student is registered
+                    ACLMessage query = new ACLMessage(ACLMessage.QUERY_REF);
+                    query.addReceiver(userManagementAgent);
+                    JSONObject queryContent = new JSONObject();
+                    queryContent.put("studentId", studentId);
+                    query.setContent(queryContent.toString());
+                    send(query);
 
-                    String checkQuery = "SELECT COUNT(*) FROM bookings WHERE room_number = ? AND date = ? AND time_slot = ?";
-                    try (PreparedStatement pstmt = connection.prepareStatement(checkQuery)) {
-                        pstmt.setString(1, roomNumber);
-                        pstmt.setString(2, date);
-                        pstmt.setString(3, timeSlot);
-                        ResultSet rs = pstmt.executeQuery();
-                        rs.next();
-                        if (rs.getInt(1) > 0) {
-                            reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
-                            reply.setContent("Room is already booked");
-                        } else {
-                            String insertBooking = "INSERT INTO bookings (room_number, date, time_slot, student_id) VALUES (?, ?, ?, ?)";
-                            try (PreparedStatement insertStmt = connection.prepareStatement(insertBooking)) {
-                                insertStmt.setString(1, roomNumber);
-                                insertStmt.setString(2, date);
-                                insertStmt.setString(3, timeSlot);
-                                insertStmt.setString(4, studentId);
-                                insertStmt.executeUpdate();
-                                reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
-                                reply.setContent("Room booked successfully");
+                    // Wait for the reply
+                    MessageTemplate replyMt = MessageTemplate.MatchSender(userManagementAgent);
+                    ACLMessage reply = blockingReceive(replyMt);
+
+                    if (reply != null) {
+                        if (reply.getPerformative() == ACLMessage.FAILURE) {
+                            // Student is not registered
+                            // Attempt to register the student
+                            ACLMessage registrationRequest = new ACLMessage(ACLMessage.REQUEST);
+                            registrationRequest.addReceiver(userManagementAgent);
+                            JSONObject registrationData = new JSONObject();
+                            registrationData.put("studentId", studentId);
+                            registrationData.put("name", name);
+                            registrationData.put("email", email);
+                            registrationRequest.setContent(registrationData.toString());
+                            send(registrationRequest);
+
+                            // Wait for the registration reply
+                            ACLMessage regReply = blockingReceive(replyMt);
+
+                            if (regReply != null && regReply.getPerformative() == ACLMessage.INFORM) {
+                                // Registration successful, send notification
+                                sendNotification(studentId, "Registration", "Registration successful");
+                                System.out.println("Student registered successfully.");
+                            } else {
+                                // Registration failed
+                                ACLMessage replyMsg = msg.createReply();
+                                replyMsg.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                                replyMsg.setContent("Registration failed: " + regReply.getContent());
+                                send(replyMsg);
+                                return;
                             }
                         }
-                    }
 
-                    send(reply);
+                        // Proceed with booking as the student is registered
+                        ACLMessage bookingReply = msg.createReply();
+
+                        String checkQuery = "SELECT COUNT(*) FROM bookings WHERE room_number = ? AND date = ? AND time_slot = ?";
+                        try (PreparedStatement pstmt = connection.prepareStatement(checkQuery)) {
+                            pstmt.setString(1, roomNumber);
+                            pstmt.setString(2, date);
+                            pstmt.setString(3, timeSlot);
+                            ResultSet rs = pstmt.executeQuery();
+                            rs.next();
+                            if (rs.getInt(1) > 0) {
+                                bookingReply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                                bookingReply.setContent("Room is already booked");
+                            } else {
+                                String insertBooking = "INSERT INTO bookings (room_number, date, time_slot, student_id) VALUES (?, ?, ?, ?)";
+                                try (PreparedStatement insertStmt = connection.prepareStatement(insertBooking)) {
+                                    insertStmt.setString(1, roomNumber);
+                                    insertStmt.setString(2, date);
+                                    insertStmt.setString(3, timeSlot);
+                                    insertStmt.setString(4, studentId);
+                                    insertStmt.executeUpdate();
+                                    bookingReply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+                                    bookingReply.setContent("Room booked successfully");
+
+                                    // Send notification about booking
+                                    sendNotification(studentId, "Booking", "Room booked successfully");
+                                    System.out.println("Room booked successfully.");
+                                }
+                            }
+                        }
+
+                        send(bookingReply);
+
+                    } else {
+                        // No reply from UserManagementAgent
+                        ACLMessage replyMsg = msg.createReply();
+                        replyMsg.setPerformative(ACLMessage.FAILURE);
+                        replyMsg.setContent("No response from UserManagementAgent");
+                        send(replyMsg);
+                    }
 
                 } catch (Exception e) {
                     e.printStackTrace();
@@ -230,6 +325,22 @@ public class FacilityBookingAgent extends Agent {
             } else {
                 block();
             }
+        }
+    }
+
+    // Method to send notification
+    private void sendNotification(String userId, String type, String message) {
+        if (notificationAgent != null) {
+            ACLMessage notifMsg = new ACLMessage(ACLMessage.REQUEST);
+            notifMsg.addReceiver(notificationAgent);
+            JSONObject notification = new JSONObject();
+            notification.put("userId", userId);
+            notification.put("type", type);
+            notification.put("message", message);
+            notifMsg.setContent(notification.toString());
+            send(notifMsg);
+        } else {
+            System.out.println("NotificationAgent not available");
         }
     }
 
