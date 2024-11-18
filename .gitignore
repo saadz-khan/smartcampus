@@ -26,6 +26,10 @@ build/
 .env.local
 .env.*.local
 
+test.java
+test-json.txt
+
+
 # Jade/Pug cache files
 *.jade-cache
 *.pug-cache
