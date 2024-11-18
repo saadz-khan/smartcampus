@@ -41,11 +41,18 @@ public class SmartCampusLauncher {
                     null
             );
 
+            AgentController guiAgent = mainContainer.createNewAgent(
+                    "GUIAgent",
+                    "agents.GUIAgent",
+                    null
+            );
+
             // Start all agents
             userAgent.start();
             bookingAgent.start();
             notificationAgent.start();
             navigationAgent.start();
+            guiAgent.start();
 
         } catch (Exception e) {
             e.printStackTrace();
