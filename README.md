@@ -1,8 +1,6 @@
-# **SmartCampus System Documentation**
+# **SmartCampus**
 
-### **SENG 696 Assignment 2: SmartCampus Development**  
-**Developer:** Saad Zafar Khan  
-**UCID:** 30258277  
+### **SENG 696 Agent Based Software Engineering**
 
 ---
 
@@ -114,11 +112,11 @@ Handles:
 #### **Navigation Assistant Agent**
 Handles:
 - Direction requests using an external navigation API (e.g., OpenRouteService or Google Maps).  
-- Generates walking routes with step-by-step directions.  
+- Generates walking routes with directions.  
 
 #### **Notification Agent**
 Handles:
-- Sending real-time notifications for bookings.  
+- Sending real-time notifications for bookings and student registration.  
 
 ---
 
