@@ -85,9 +85,14 @@ public class GUIAgent extends Agent {
         panel.add(registerButton);
 
         registerButton.addActionListener(e -> {
-            String studentId = studentIdField.getText();
-            String name = nameField.getText();
-            String email = emailField.getText();
+            String studentId = studentIdField.getText().trim();
+            String name = nameField.getText().trim();
+            String email = emailField.getText().trim();
+
+            if (studentId.isEmpty() || name.isEmpty() || email.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "All fields are required.", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
 
             JSONObject request = new JSONObject();
             request.put("studentId", studentId);
@@ -106,7 +111,14 @@ public class GUIAgent extends Agent {
                     ACLMessage reply = blockingReceive();
                     if (reply != null) {
                         SwingUtilities.invokeLater(() -> {
-                            notificationsArea.append("User Registration: " + reply.getContent() + "\n");
+                            String notificationMessage = "User Registration: " + reply.getContent();
+                            notificationsArea.append(notificationMessage + "\n");
+
+                            if (reply.getPerformative() == ACLMessage.INFORM) {
+                                JOptionPane.showMessageDialog(frame, "Registration successful!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                            } else {
+                                JOptionPane.showMessageDialog(frame, "Registration failed: " + reply.getContent(), "Error", JOptionPane.ERROR_MESSAGE);
+                            }
                         });
                     }
                 }
@@ -116,14 +128,16 @@ public class GUIAgent extends Agent {
         return panel;
     }
 
+
     private JPanel createFacilityBookingPanel() {
-        JPanel panel = new JPanel(new GridLayout(6, 2));
+        JPanel panel = new JPanel(new GridLayout(8, 2));
+
         JTextField studentIdField = new JTextField();
         JTextField dateField = new JTextField();
         JTextField timeSlotField = new JTextField();
         JTextField capacityField = new JTextField();
         JTextArea availableRoomsArea = new JTextArea(5, 20);
-
+        JComboBox<String> roomSelectionBox = new JComboBox<>();
         JButton checkAvailabilityButton = new JButton("Check Availability");
         JButton bookRoomButton = new JButton("Book Room");
 
@@ -131,15 +145,19 @@ public class GUIAgent extends Agent {
         panel.add(studentIdField);
         panel.add(new JLabel("Date (YYYY-MM-DD):"));
         panel.add(dateField);
-        panel.add(new JLabel("Time Slot:"));
+        panel.add(new JLabel("Time Slot (HH:MM-HH:MM):"));
         panel.add(timeSlotField);
         panel.add(new JLabel("Capacity:"));
         panel.add(capacityField);
         panel.add(checkAvailabilityButton);
-        panel.add(bookRoomButton);
+        panel.add(new JLabel());
         panel.add(new JLabel("Available Rooms:"));
         panel.add(new JScrollPane(availableRoomsArea));
+        panel.add(new JLabel("Select Room:"));
+        panel.add(roomSelectionBox);
+        panel.add(bookRoomButton);
 
+        // Check Room Availability
         checkAvailabilityButton.addActionListener(e -> {
             String date = dateField.getText();
             String timeSlot = timeSlotField.getText();
@@ -164,6 +182,55 @@ public class GUIAgent extends Agent {
                             notificationsArea.append("Facility Booking: " + reply.getContent() + "\n");
                             if (reply.getPerformative() == ACLMessage.INFORM) {
                                 availableRoomsArea.setText(reply.getContent());
+
+                                // Populate room selection box
+                                roomSelectionBox.removeAllItems();
+                                JSONArray availableRooms = new JSONArray(reply.getContent());
+                                for (int i = 0; i < availableRooms.length(); i++) {
+                                    JSONObject room = availableRooms.getJSONObject(i);
+                                    roomSelectionBox.addItem(room.getString("roomNumber"));
+                                }
+                            }
+                        });
+                    }
+                }
+            });
+        });
+
+        // Book Selected Room
+        bookRoomButton.addActionListener(e -> {
+            String studentId = studentIdField.getText();
+            String date = dateField.getText();
+            String timeSlot = timeSlotField.getText();
+            String selectedRoom = (String) roomSelectionBox.getSelectedItem();
+
+            if (selectedRoom == null || selectedRoom.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Please select a room to book.", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
+            JSONObject bookingRequest = new JSONObject();
+            bookingRequest.put("studentId", studentId);
+            bookingRequest.put("date", date);
+            bookingRequest.put("timeSlot", timeSlot);
+            bookingRequest.put("roomNumber", selectedRoom);
+
+            ACLMessage msg = new ACLMessage(ACLMessage.PROPOSE);
+            msg.addReceiver(agentAIDs.get("BookingAgent")); // Use AID for BookingAgent
+            msg.setContent(bookingRequest.toString());
+            send(msg);
+
+            addBehaviour(new OneShotBehaviour() {
+                @Override
+                public void action() {
+                    ACLMessage reply = blockingReceive();
+                    if (reply != null) {
+                        SwingUtilities.invokeLater(() -> {
+                            notificationsArea.append("Room Booking: " + reply.getContent() + "\n");
+                            if (reply.getPerformative() == ACLMessage.ACCEPT_PROPOSAL) {
+                                JOptionPane.showMessageDialog(frame, "Room booked successfully!", "Success", JOptionPane.INFORMATION_MESSAGE);
+                            } else {
+                                JOptionPane.showMessageDialog(frame, "Booking failed: " + reply.getContent(), "Error", JOptionPane.ERROR_MESSAGE);
                             }
                         });
                     }
@@ -173,6 +240,7 @@ public class GUIAgent extends Agent {
 
         return panel;
     }
+
 
     private JPanel createNavigationPanel() {
         JPanel panel = new JPanel(new GridLayout(4, 2));
