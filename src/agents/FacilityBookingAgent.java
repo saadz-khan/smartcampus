@@ -13,6 +13,10 @@ import org.json.JSONArray;
 
 import java.sql.*;
 
+import java.time.LocalDate;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
+
 public class FacilityBookingAgent extends Agent {
     private Connection connection;
     private AID userManagementAgent;
@@ -85,6 +89,16 @@ public class FacilityBookingAgent extends Agent {
         }
     }
 
+    private boolean isFutureDate(String date) {
+        try {
+            LocalDate bookingDate = LocalDate.parse(date, DateTimeFormatter.ISO_LOCAL_DATE);
+            return bookingDate.isAfter(LocalDate.now());
+        } catch (DateTimeParseException e) {
+            System.err.println("Invalid date format: " + date);
+            return false;
+        }
+    }
+
     private void initializeDatabase() throws SQLException {
         try (Statement stmt = connection.createStatement()) {
             // Create rooms table
@@ -107,10 +121,11 @@ public class FacilityBookingAgent extends Agent {
 
             // Prepopulate rooms if not already populated
             String checkRooms = "SELECT COUNT(*) FROM rooms";
-            ResultSet rs = stmt.executeQuery(checkRooms);
-            if (rs.next() && rs.getInt(1) == 0) {
-                System.out.println("Populating rooms with predefined data...");
-                populateRooms();
+            try (ResultSet rs = stmt.executeQuery(checkRooms)) {
+                if (rs.next() && rs.getInt(1) == 0) {
+                    System.out.println("Populating rooms with predefined data...");
+                    populateRooms();
+                }
             }
         }
     }
@@ -154,14 +169,15 @@ public class FacilityBookingAgent extends Agent {
                         pstmt.setInt(1, capacity);
                         pstmt.setString(2, date);
                         pstmt.setString(3, timeSlot);
-                        ResultSet rs = pstmt.executeQuery();
-                        while (rs.next()) {
-                            JSONObject room = new JSONObject();
-                            room.put("roomNumber", rs.getString("room_number"));
-                            room.put("capacity", rs.getInt("capacity"));
-                            room.put("location", rs.getString("location"));
-                            room.put("floor", rs.getInt("floor"));
-                            availableRooms.put(room);
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            while (rs.next()) {
+                                JSONObject room = new JSONObject();
+                                room.put("roomNumber", rs.getString("room_number"));
+                                room.put("capacity", rs.getInt("capacity"));
+                                room.put("location", rs.getString("location"));
+                                room.put("floor", rs.getInt("floor"));
+                                availableRooms.put(room);
+                            }
                         }
                     }
 
@@ -195,6 +211,16 @@ public class FacilityBookingAgent extends Agent {
                     String name = request.optString("name");   // Optional
                     String email = request.optString("email"); // Optional
 
+                    ACLMessage reply = msg.createReply();
+
+                    // Check if the date is valid
+                    if (!isFutureDate(date)) {
+                        reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                        reply.setContent("Invalid date. Booking date must be in the future.");
+                        send(reply);
+                        return;
+                    }
+
                     // Check if the student is registered
                     ACLMessage query = new ACLMessage(ACLMessage.QUERY_REF);
                     query.addReceiver(userManagementAgent);
@@ -205,77 +231,47 @@ public class FacilityBookingAgent extends Agent {
 
                     // Wait for the reply
                     MessageTemplate replyMt = MessageTemplate.MatchSender(userManagementAgent);
-                    ACLMessage reply = blockingReceive(replyMt);
+                    ACLMessage queryReply = blockingReceive(replyMt);
 
-                    if (reply != null) {
-                        if (reply.getPerformative() == ACLMessage.FAILURE) {
-                            // Student is not registered
-                            // Attempt to register the student
-                            ACLMessage registrationRequest = new ACLMessage(ACLMessage.REQUEST);
-                            registrationRequest.addReceiver(userManagementAgent);
-                            JSONObject registrationData = new JSONObject();
-                            registrationData.put("studentId", studentId);
-                            registrationData.put("name", name);
-                            registrationData.put("email", email);
-                            registrationRequest.setContent(registrationData.toString());
-                            send(registrationRequest);
+                    if (queryReply != null && queryReply.getPerformative() == ACLMessage.FAILURE) {
+                        reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                        reply.setContent("Student ID not registered. Please register first.");
+                        send(reply);
+                        return;
+                    }
 
-                            // Wait for the registration reply
-                            ACLMessage regReply = blockingReceive(replyMt);
-
-                            if (regReply != null && regReply.getPerformative() == ACLMessage.INFORM) {
-                                // Registration successful, send notification
-                                sendNotification(studentId, "Registration", "Registration successful");
-                                System.out.println("Student registered successfully.");
-                            } else {
-                                // Registration failed
-                                ACLMessage replyMsg = msg.createReply();
-                                replyMsg.setPerformative(ACLMessage.REJECT_PROPOSAL);
-                                replyMsg.setContent("Registration failed: " + regReply.getContent());
-                                send(replyMsg);
+                    // Check if the room is available for booking
+                    String checkQuery = "SELECT COUNT(*) FROM bookings WHERE room_number = ? AND date = ? AND time_slot = ?";
+                    try (PreparedStatement pstmt = connection.prepareStatement(checkQuery)) {
+                        pstmt.setString(1, roomNumber);
+                        pstmt.setString(2, date);
+                        pstmt.setString(3, timeSlot);
+                        try (ResultSet rs = pstmt.executeQuery()) {
+                            rs.next();
+                            if (rs.getInt(1) > 0) {
+                                reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                                reply.setContent("Room is already booked for the given date and time slot.");
+                                send(reply);
                                 return;
                             }
                         }
+                    }
 
-                        // Proceed with booking as the student is registered
-                        ACLMessage bookingReply = msg.createReply();
+                    // Proceed with booking
+                    String insertBooking = "INSERT INTO bookings (room_number, date, time_slot, student_id) VALUES (?, ?, ?, ?)";
+                    try (PreparedStatement insertStmt = connection.prepareStatement(insertBooking)) {
+                        insertStmt.setString(1, roomNumber);
+                        insertStmt.setString(2, date);
+                        insertStmt.setString(3, timeSlot);
+                        insertStmt.setString(4, studentId);
+                        insertStmt.executeUpdate();
 
-                        String checkQuery = "SELECT COUNT(*) FROM bookings WHERE room_number = ? AND date = ? AND time_slot = ?";
-                        try (PreparedStatement pstmt = connection.prepareStatement(checkQuery)) {
-                            pstmt.setString(1, roomNumber);
-                            pstmt.setString(2, date);
-                            pstmt.setString(3, timeSlot);
-                            ResultSet rs = pstmt.executeQuery();
-                            rs.next();
-                            if (rs.getInt(1) > 0) {
-                                bookingReply.setPerformative(ACLMessage.REJECT_PROPOSAL);
-                                bookingReply.setContent("Room is already booked");
-                            } else {
-                                String insertBooking = "INSERT INTO bookings (room_number, date, time_slot, student_id) VALUES (?, ?, ?, ?)";
-                                try (PreparedStatement insertStmt = connection.prepareStatement(insertBooking)) {
-                                    insertStmt.setString(1, roomNumber);
-                                    insertStmt.setString(2, date);
-                                    insertStmt.setString(3, timeSlot);
-                                    insertStmt.setString(4, studentId);
-                                    insertStmt.executeUpdate();
-                                    bookingReply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
-                                    bookingReply.setContent("Room booked successfully");
+                        reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
+                        reply.setContent("Room booked successfully.");
+                        send(reply);
 
-                                    // Send notification about booking
-                                    sendNotification(studentId, "Booking", "Room booked successfully");
-                                    System.out.println("Room booked successfully.");
-                                }
-                            }
-                        }
-
-                        send(bookingReply);
-
-                    } else {
-                        // No reply from UserManagementAgent
-                        ACLMessage replyMsg = msg.createReply();
-                        replyMsg.setPerformative(ACLMessage.FAILURE);
-                        replyMsg.setContent("No response from UserManagementAgent");
-                        send(replyMsg);
+                        // Send notification
+                        sendNotification(studentId, "Booking", "Room booked successfully for " + date + " at " + timeSlot);
                     }
 
                 } catch (Exception e) {
@@ -327,7 +323,6 @@ public class FacilityBookingAgent extends Agent {
             }
         }
     }
-
     // Method to send notification
     private void sendNotification(String userId, String type, String message) {
         if (notificationAgent != null) {

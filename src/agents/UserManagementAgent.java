@@ -78,7 +78,6 @@ public class UserManagementAgent extends Agent {
 
     private void initializeDatabase() {
         try (Statement stmt = connection.createStatement()) {
-            // Create the students table if it doesn't exist
             String createTableSQL = "CREATE TABLE IF NOT EXISTS students (" +
                     "id INTEGER PRIMARY KEY AUTOINCREMENT, " +
                     "student_id TEXT UNIQUE NOT NULL, " +
@@ -90,13 +89,14 @@ public class UserManagementAgent extends Agent {
 
             // Insert sample data if the table is empty
             String checkTableSQL = "SELECT COUNT(*) FROM students";
-            ResultSet rs = stmt.executeQuery(checkTableSQL);
-            rs.next();
-            if (rs.getInt(1) == 0) {
-                System.out.println("Populating students table with sample data...");
-                populateSampleData();
-            } else {
-                System.out.println("Students table already populated.");
+            try (ResultSet rs = stmt.executeQuery(checkTableSQL)) {
+                rs.next();
+                if (rs.getInt(1) == 0) {
+                    System.out.println("Populating students table with sample data...");
+                    populateSampleData();
+                } else {
+                    System.out.println("Students table already populated.");
+                }
             }
         } catch (SQLException e) {
             e.printStackTrace();
@@ -106,14 +106,13 @@ public class UserManagementAgent extends Agent {
     private void populateSampleData() {
         String insertSQL = "INSERT INTO students (student_id, name, email) VALUES (?, ?, ?)";
         try (PreparedStatement pstmt = connection.prepareStatement(insertSQL)) {
-            // Add sample student records
             pstmt.setString(1, "12345678");
             pstmt.setString(2, "John Doe");
             pstmt.setString(3, "john.doe@example.com");
             pstmt.executeUpdate();
 
             pstmt.setString(1, "87654321");
-            pstmt.setString(2, "Jane Smith");
+                pstmt.setString(2, "Jane Smith");
             pstmt.setString(3, "jane.smith@example.com");
             pstmt.executeUpdate();
 
@@ -127,6 +126,12 @@ public class UserManagementAgent extends Agent {
             e.printStackTrace();
         }
     }
+
+    private boolean isValidEmail(String email) {
+        // Check if email ends with @ucalgary.ca and matches a basic email format
+        return email.matches("^[a-zA-Z0-9._%+-]+@ucalgary\\.ca$");
+    }
+
 
     private class StudentRegistrationBehavior extends CyclicBehaviour {
         public void action() {
@@ -144,14 +149,17 @@ public class UserManagementAgent extends Agent {
 
                     if (!isValidStudentId(studentId)) {
                         reply.setPerformative(ACLMessage.FAILURE);
-                        reply.setContent("Invalid student ID format");
+                        reply.setContent("Invalid student ID format. Must be an 8-digit number.");
                     } else if (isStudentIdExists(studentId)) {
                         reply.setPerformative(ACLMessage.FAILURE);
-                        reply.setContent("Student ID already exists");
+                        reply.setContent("Student ID already exists.");
+                    } else if (!isValidEmail(email)) {
+                        reply.setPerformative(ACLMessage.FAILURE);
+                        reply.setContent("Invalid email address. Only @ucalgary.ca domain is allowed.");
                     } else {
                         registerStudent(studentId, name, email);
                         reply.setPerformative(ACLMessage.INFORM);
-                        reply.setContent("Registration successful");
+                        reply.setContent("Registration successful.");
                     }
 
                     send(reply);
@@ -163,6 +171,7 @@ public class UserManagementAgent extends Agent {
             }
         }
     }
+
 
     // New behavior to handle student registration status queries
     private class StudentQueryBehavior extends CyclicBehaviour {
@@ -187,7 +196,6 @@ public class UserManagementAgent extends Agent {
                     }
 
                     send(reply);
-
                 } catch (Exception e) {
                     e.printStackTrace();
                 }
@@ -202,12 +210,13 @@ public class UserManagementAgent extends Agent {
     }
 
     private boolean isStudentIdExists(String studentId) {
-        try {
-            PreparedStatement stmt = connection.prepareStatement("SELECT COUNT(*) FROM students WHERE student_id = ?");
+        String query = "SELECT COUNT(*) FROM students WHERE student_id = ?";
+        try (PreparedStatement stmt = connection.prepareStatement(query)) {
             stmt.setString(1, studentId);
-            ResultSet rs = stmt.executeQuery();
-            rs.next();
-            return rs.getInt(1) > 0;
+            try (ResultSet rs = stmt.executeQuery()) {
+                rs.next();
+                return rs.getInt(1) > 0;
+            }
         } catch (SQLException e) {
             e.printStackTrace();
             return false;
@@ -215,10 +224,8 @@ public class UserManagementAgent extends Agent {
     }
 
     private void registerStudent(String studentId, String name, String email) {
-        try {
-            PreparedStatement stmt = connection.prepareStatement(
-                    "INSERT INTO students (student_id, name, email) VALUES (?, ?, ?)"
-            );
+        String insertSQL = "INSERT INTO students (student_id, name, email) VALUES (?, ?, ?)";
+        try (PreparedStatement stmt = connection.prepareStatement(insertSQL)) {
             stmt.setString(1, studentId);
             stmt.setString(2, name);
             stmt.setString(3, email);
@@ -226,7 +233,9 @@ public class UserManagementAgent extends Agent {
 
             // Send notification
             sendNotification(studentId, "Registration", "Registration successful");
+            System.out.println("Student registered successfully: " + studentId);
         } catch (SQLException e) {
+            System.err.println("Error during student registration: " + e.getMessage());
             e.printStackTrace();
         }
     }
