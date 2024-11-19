@@ -206,14 +206,12 @@ public class FacilityBookingAgent extends Agent {
                     JSONObject request = new JSONObject(msg.getContent());
                     String roomNumber = request.getString("roomNumber");
                     String date = request.getString("date");
-                    String timeSlot = request.getString("timeSlot");
+                    String timeSlot = request.getString("timeSlot"); // Format: "HH:MM-HH:MM"
                     String studentId = request.getString("studentId");
-                    String name = request.optString("name");   // Optional
-                    String email = request.optString("email"); // Optional
 
                     ACLMessage reply = msg.createReply();
 
-                    // Check if the date is valid
+                    // Validate booking date
                     if (!isFutureDate(date)) {
                         reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
                         reply.setContent("Invalid date. Booking date must be in the future.");
@@ -221,26 +219,23 @@ public class FacilityBookingAgent extends Agent {
                         return;
                     }
 
-                    // Check if the student is registered
-                    ACLMessage query = new ACLMessage(ACLMessage.QUERY_REF);
-                    query.addReceiver(userManagementAgent);
-                    JSONObject queryContent = new JSONObject();
-                    queryContent.put("studentId", studentId);
-                    query.setContent(queryContent.toString());
-                    send(query);
-
-                    // Wait for the reply
-                    MessageTemplate replyMt = MessageTemplate.MatchSender(userManagementAgent);
-                    ACLMessage queryReply = blockingReceive(replyMt);
-
-                    if (queryReply != null && queryReply.getPerformative() == ACLMessage.FAILURE) {
+                    // Validate booking duration
+                    if (!isValidTimeSlot(timeSlot)) {
                         reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
-                        reply.setContent("Student ID not registered. Please register first.");
+                        reply.setContent("Invalid time slot. Maximum booking duration is 2 hours.");
                         send(reply);
                         return;
                     }
 
-                    // Check if the room is available for booking
+                    // Check if the student already has an active booking
+                    if (hasActiveBooking(studentId, date)) {
+                        reply.setPerformative(ACLMessage.REJECT_PROPOSAL);
+                        reply.setContent("You already have an active booking. Cancel it before making a new one.");
+                        send(reply);
+                        return;
+                    }
+
+                    // Check room availability
                     String checkQuery = "SELECT COUNT(*) FROM bookings WHERE room_number = ? AND date = ? AND time_slot = ?";
                     try (PreparedStatement pstmt = connection.prepareStatement(checkQuery)) {
                         pstmt.setString(1, roomNumber);
@@ -281,7 +276,43 @@ public class FacilityBookingAgent extends Agent {
                 block();
             }
         }
+
+        private boolean isValidTimeSlot(String timeSlot) {
+            try {
+                String[] parts = timeSlot.split("-");
+                String[] startParts = parts[0].split(":");
+                String[] endParts = parts[1].split(":");
+
+                int startHour = Integer.parseInt(startParts[0]);
+                int startMinute = Integer.parseInt(startParts[1]);
+                int endHour = Integer.parseInt(endParts[0]);
+                int endMinute = Integer.parseInt(endParts[1]);
+
+                // Calculate duration in minutes
+                int duration = (endHour * 60 + endMinute) - (startHour * 60 + startMinute);
+                return duration > 0 && duration <= 120; // Maximum 2 hours
+            } catch (Exception e) {
+                System.err.println("Invalid time slot format: " + timeSlot);
+                return false;
+            }
+        }
+
+        private boolean hasActiveBooking(String studentId, String date) {
+            String query = "SELECT COUNT(*) FROM bookings WHERE student_id = ? AND date = ?";
+            try (PreparedStatement pstmt = connection.prepareStatement(query)) {
+                pstmt.setString(1, studentId);
+                pstmt.setString(2, date);
+                try (ResultSet rs = pstmt.executeQuery()) {
+                    rs.next();
+                    return rs.getInt(1) > 0;
+                }
+            } catch (SQLException e) {
+                e.printStackTrace();
+                return false;
+            }
+        }
     }
+
 
     private class CancelBookingBehavior extends CyclicBehaviour {
         @Override
