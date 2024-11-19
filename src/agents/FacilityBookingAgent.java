@@ -297,7 +297,7 @@ public class FacilityBookingAgent extends Agent {
             }
         }
 
-        private boolean hasActivgeBooking(String studentId, String date) {
+        private boolean hasActivgieBooking(String studentId, String date) {
             String query = "SELECT COUNT(*) FROM bookings WHERE student_id = ? AND date = ?";
             try (PreparedStatement pstmt = connection.prepareStatement(query)) {
                 pstmt.setString(1, studentId);
