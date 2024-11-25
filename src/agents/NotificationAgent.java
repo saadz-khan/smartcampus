@@ -1,6 +1,7 @@
 package agents;
 
 import jade.core.Agent;
+import jade.core.AID;
 import jade.core.behaviours.CyclicBehaviour;
 import jade.lang.acl.ACLMessage;
 import jade.lang.acl.MessageTemplate;
@@ -67,11 +68,25 @@ public class NotificationAgent extends Agent {
 
         // Method to send a notification
         private void sendNotification(String userId, String type, String message) {
-            // Implement the notification logic
-            // Example: Print to console (this could be replaced with an email, SMS, etc.)
-            System.out.println("Notification for user " + userId + ": " + message);
+            // Print the notification to the console
+            //System.out.println("Notification for user " + userId + ": " + message);
+
+            // Forward the notification to the GUIAgent
+            ACLMessage guiMessage = new ACLMessage(ACLMessage.INFORM);
+            AID guiAgent = new AID("GUIAgent", AID.ISLOCALNAME); // Assumes GUIAgent's local name
+            guiMessage.addReceiver(guiAgent);
+
+            JSONObject guiNotification = new JSONObject();
+            guiNotification.put("userId", userId);
+            guiNotification.put("type", type);
+            guiNotification.put("message", message);
+
+            guiMessage.setContent(guiNotification.toString());
+            send(guiMessage);
         }
     }
+
+
 
     @Override
     protected void takeDown() {

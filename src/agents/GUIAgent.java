@@ -262,6 +262,11 @@ public class GUIAgent extends Agent {
             String currentLocation = currentLocationField.getText();
             String roomNumber = roomNumberField.getText();
 
+            if (currentLocation.isEmpty() || roomNumber.isEmpty()) {
+                JOptionPane.showMessageDialog(frame, "Both fields are required.", "Error", JOptionPane.ERROR_MESSAGE);
+                return;
+            }
+
             JSONObject request = new JSONObject();
             request.put("currentLocation", currentLocation);
             request.put("roomNumber", roomNumber);
@@ -277,13 +282,28 @@ public class GUIAgent extends Agent {
                     ACLMessage reply = blockingReceive();
                     if (reply != null) {
                         SwingUtilities.invokeLater(() -> {
-                            notificationsArea.append("Navigation Directions: " + reply.getContent() + "\n");
-                            directionsArea.setText(reply.getContent());
+                            String content = reply.getContent();
+                            try {
+                                JSONObject response = new JSONObject(content);
+                                if (response.has("error")) {
+                                    directionsArea.setText("Error: " + response.getString("error"));
+                                    JOptionPane.showMessageDialog(frame, "Error: " + response.getString("error"), "Navigation Error", JOptionPane.ERROR_MESSAGE);
+                                } else {
+                                    directionsArea.setText("Building: " + response.getString("building") + "\n" +
+                                            "Floor: " + response.getInt("floor") + "\n" +
+                                            "Directions: " + response.getString("directions") + "\n" +
+                                            "Estimated Time: " + response.getString("estimatedTime"));
+                                }
+                            } catch (Exception ex) {
+                                directionsArea.setText("Invalid response from NavigationAgent.");
+                                JOptionPane.showMessageDialog(frame, "Invalid response from NavigationAgent.", "Error", JOptionPane.ERROR_MESSAGE);
+                            }
                         });
                     }
                 }
             });
         });
+
 
         return panel;
     }
@@ -303,7 +323,17 @@ public class GUIAgent extends Agent {
             ACLMessage msg = receive();
             if (msg != null) {
                 SwingUtilities.invokeLater(() -> {
-                    notificationsArea.append("Notification: " + msg.getContent() + "\n");
+                    try {
+                        JSONObject notification = new JSONObject(msg.getContent());
+                        String userId = notification.getString("userId");
+                        String type = notification.getString("type");
+                        String message = notification.getString("message");
+
+                        // Display the notification in the GUI
+                        notificationsArea.append("Notification for User " + userId + " (" + type + "): " + message + "\n");
+                    } catch (Exception e) {
+                        notificationsArea.append("Received an invalid notification message.\n");
+                    }
                 });
             } else {
                 block();

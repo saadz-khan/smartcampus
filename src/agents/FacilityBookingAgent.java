@@ -261,7 +261,7 @@ public class FacilityBookingAgent extends Agent {
                         insertStmt.setString(4, studentId);
                         insertStmt.executeUpdate();
 
-                        reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);ckl
+                        reply.setPerformative(ACLMessage.ACCEPT_PROPOSAL);
                         reply.setContent("Room booked successfully.");
                         send(reply);
 
